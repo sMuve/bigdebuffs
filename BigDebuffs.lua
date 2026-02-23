@@ -545,7 +545,7 @@ end
 local function FindCompactPartyFrame(unit)
     if not CompactPartyFrame or not CompactPartyFrame:IsShown() then return end
 
-    local partyIndex = unit and tonumber(unit:match("^party(%d+)$"))
+    local targetGUID = GetUnitGuidSafe(unit)
 
     for i = 1, MAX_COMPACT_PARTY_MEMBERS do
         local member = _G["CompactPartyFrameMember" .. i]
@@ -554,13 +554,19 @@ local function FindCompactPartyFrame(unit)
             if displayedUnit == unit then
                 return member
             end
-        end
-    end
 
-    if partyIndex then
-        local member = _G["CompactPartyFrameMember" .. partyIndex]
-        if member and member:IsShown() then
-            return member
+            if targetGUID then
+                if member.guid and member.guid == targetGUID then
+                    return member
+                end
+
+                if displayedUnit then
+                    local displayedGUID = GetUnitGuidSafe(displayedUnit)
+                    if displayedGUID and displayedGUID == targetGUID then
+                        return member
+                    end
+                end
+            end
         end
     end
 end
@@ -575,14 +581,79 @@ end
 local function GetBlizzardPartyMemberFrame(unit)
     if not unit or not unit:match("^party%d$") then return end
 
-    local partyIndex = tonumber(unit:match("%d+"))
-    if not partyIndex then return end
+    local targetGUID = GetUnitGuidSafe(unit)
 
-    if _G.PartyFrame and _G.PartyFrame["MemberFrame" .. partyIndex] then
-        return _G.PartyFrame["MemberFrame" .. partyIndex]
+    if _G.PartyFrame and _G.PartyFrame.PartyMemberFramePool then
+        for memberFrame in _G.PartyFrame.PartyMemberFramePool:EnumerateActive() do
+            local frameUnit = memberFrame.displayedUnit or memberFrame.unit
+            if frameUnit == unit then
+                return memberFrame
+            end
+
+            if targetGUID then
+                if memberFrame.guid and memberFrame.guid == targetGUID then
+                    return memberFrame
+                end
+
+                if frameUnit then
+                    local frameGUID = GetUnitGuidSafe(frameUnit)
+                    if frameGUID and frameGUID == targetGUID then
+                        return memberFrame
+                    end
+                end
+            end
+        end
     end
 
-    return _G["PartyMemberFrame" .. partyIndex]
+    if _G.PartyFrame then
+        for i = 1, MAX_COMPACT_PARTY_MEMBERS do
+            local memberFrame = _G.PartyFrame["MemberFrame" .. i]
+            if memberFrame then
+                local frameUnit = memberFrame.displayedUnit or memberFrame.unit
+                if frameUnit == unit then
+                    return memberFrame
+                end
+
+                if targetGUID then
+                    if memberFrame.guid and memberFrame.guid == targetGUID then
+                        return memberFrame
+                    end
+
+                    if frameUnit then
+                        local frameGUID = GetUnitGuidSafe(frameUnit)
+                        if frameGUID and frameGUID == targetGUID then
+                            return memberFrame
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    for i = 1, MAX_COMPACT_PARTY_MEMBERS do
+        local memberFrame = _G["PartyMemberFrame" .. i]
+        if memberFrame then
+            local frameUnit = memberFrame.displayedUnit or memberFrame.unit
+            if frameUnit == unit then
+                return memberFrame
+            end
+
+            if targetGUID then
+                if memberFrame.guid and memberFrame.guid == targetGUID then
+                    return memberFrame
+                end
+
+                if frameUnit then
+                    local frameGUID = GetUnitGuidSafe(frameUnit)
+                    if frameGUID and frameGUID == targetGUID then
+                        return memberFrame
+                    end
+                end
+            end
+        end
+    end
+
+    return FindCompactPartyFrame(unit)
 end
 
 local function GetFramePortraitTexture(frame)
@@ -650,14 +721,6 @@ local GetAnchor = {
                 local compact = FindCompactPartyFrame(unit)
                 if compact then
                     candidate = compact
-                elseif unit then
-                    local partyIndex = tonumber(unit:match("^party(%d+)$"))
-                    if partyIndex then
-                        local compactByIndex = _G["CompactPartyFrameMember" .. partyIndex]
-                        if compactByIndex and compactByIndex:IsShown() then
-                            candidate = compactByIndex
-                        end
-                    end
                 end
             end
 
@@ -1155,11 +1218,35 @@ end
 local function GetBlizzardUnitAnchor(unit)
     local anchor = anchors.Blizzard.units[unit]
     if type(anchor) == "table" then
-        return anchor
+        if unit and unit:match("^party%d$") then
+            local frameUnit = anchor.displayedUnit or anchor.unit
+            local targetGUID = GetUnitGuidSafe(unit)
+
+            if frameUnit == unit then
+                return anchor
+            end
+
+            if targetGUID then
+                if anchor.guid and anchor.guid == targetGUID then
+                    return anchor
+                end
+
+                if frameUnit then
+                    local frameGUID = GetUnitGuidSafe(frameUnit)
+                    if frameGUID and frameGUID == targetGUID then
+                        return anchor
+                    end
+                end
+            end
+
+            anchors.Blizzard.units[unit] = nil
+        else
+            return anchor
+        end
     end
     if type(anchor) == "string" then
         local anchorFrame = _G[anchor]
-        if anchorFrame then
+        if anchorFrame and (not unit or not unit:match("^party%d$")) then
             return anchorFrame
         end
     end
@@ -1174,7 +1261,6 @@ local function GetBlizzardUnitAnchor(unit)
         return partyFrame
     end
 
-    local partyIndex = tonumber(unit:match("%d+"))
     if _G.PartyFrame and _G.PartyFrame.PartyMemberFramePool then
         for memberFrame in _G.PartyFrame.PartyMemberFramePool:EnumerateActive() do
             if memberFrame.unit == unit then
@@ -1184,18 +1270,10 @@ local function GetBlizzardUnitAnchor(unit)
         end
     end
 
-    local fallbackFrames = {
-        "CompactPartyFrameMember" .. partyIndex,
-        "PartyMemberFrame" .. partyIndex .. "Portrait",
-        "PartyMemberFrame" .. partyIndex,
-    }
-
-    for i = 1, #fallbackFrames do
-        local anchorFrame = _G[fallbackFrames[i]]
-        if anchorFrame then
-            anchors.Blizzard.units[unit] = anchorFrame
-            return anchorFrame
-        end
+    local compact = FindCompactPartyFrame(unit)
+    if compact then
+        anchors.Blizzard.units[unit] = compact
+        return compact
     end
 end
 
@@ -1717,6 +1795,28 @@ BigDebuffs.AttachedFrames = {}
 
 local INCREASED_MAX_BUFFS = 6
 
+local function ResolvePartyUnitByGUID(frame, defaultUnit)
+    if not frame then return end
+
+    local frameGUID = frame.guid
+    if not frameGUID then return end
+
+    if defaultUnit and GetUnitGuidSafe(defaultUnit) == frameGUID then
+        return defaultUnit
+    end
+
+    if GetUnitGuidSafe("player") == frameGUID then
+        return "player"
+    end
+
+    for i = 1, MAX_COMPACT_PARTY_MEMBERS - 1 do
+        local partyUnit = "party" .. i
+        if GetUnitGuidSafe(partyUnit) == frameGUID then
+            return partyUnit
+        end
+    end
+end
+
 local function GetFrameUnit(frame)
     if not frame then return end
 
@@ -1743,12 +1843,12 @@ local function GetFrameUnit(frame)
         if frameName then
             local compactPartyIndex = frameName:match("^CompactPartyFrameMember(%d+)$")
             if compactPartyIndex then
-                return "party" .. compactPartyIndex
+                return ResolvePartyUnitByGUID(frame, "party" .. compactPartyIndex)
             end
 
             local partyIndex = frameName:match("MemberFrame(%d+)")
             if partyIndex then
-                return "party" .. partyIndex
+                return ResolvePartyUnitByGUID(frame, "party" .. partyIndex)
             end
         end
     end
