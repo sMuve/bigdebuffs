@@ -397,7 +397,275 @@ for i = 1, 40 do
     table.insert(unitsWithRaid, "raid" .. i)
 end
 
+local MAX_COMPACT_PARTY_MEMBERS = MEMBERS_PER_RAID_GROUP or 5
+
+local MAX_GW_PARTY_FRAMES = 5
+local MAX_GW_PARTY_GROUPS = 5
+
+local function GetUnitGuidSafe(unit)
+    if not unit or not UnitExists(unit) then return end
+    return UnitGUID(unit)
+end
+
+local function Gw2FrameMatchesUnit(frame, unit, targetGUID)
+    if not frame then return end
+
+    local frameUnit = frame.unit
+
+    if not frameUnit and frame.GetAttribute then
+        frameUnit = frame:GetAttribute("unit")
+
+        if not frameUnit then
+            local base = frame:GetAttribute("unitbase")
+            local suffix = frame:GetAttribute("unitsuffix")
+            if base and suffix then
+                frameUnit = base .. suffix
+            end
+        end
+    end
+
+    if not frameUnit and frame.displayedUnit then
+        frameUnit = frame.displayedUnit
+    end
+
+    if frameUnit and unit and frameUnit == unit then
+        return frame
+    end
+
+    if targetGUID then
+        if frame.guid and frame.guid == targetGUID then
+            return frame
+        end
+
+        if frameUnit then
+            local frameGUID = GetUnitGuidSafe(frameUnit)
+            if frameGUID and frameGUID == targetGUID then
+                return frame
+            end
+        end
+
+        if frame.displayedUnit then
+            local displayedGUID = GetUnitGuidSafe(frame.displayedUnit)
+            if displayedGUID and displayedGUID == targetGUID then
+                return frame
+            end
+        end
+    end
+end
+
+local function FindGw2FrameInGroup(group, unit, targetGUID)
+    if not group then return end
+
+    if group.GetAttribute then
+        local childIndex = 1
+        while true do
+            local child = group:GetAttribute("child" .. childIndex)
+            if not child then break end
+
+            local match = Gw2FrameMatchesUnit(child, unit, targetGUID)
+            if match then
+                return match
+            end
+
+            childIndex = childIndex + 1
+        end
+    end
+
+    if group.GetChildren then
+        local children = { group:GetChildren() }
+        for i = 1, #children do
+            local match = Gw2FrameMatchesUnit(children[i], unit, targetGUID)
+            if match then
+                return match
+            end
+        end
+    end
+end
+
+local function FindGw2UIRaidStylePartyFrame(unit)
+    if not unit then return end
+
+    local targetGUID = GetUnitGuidSafe(unit)
+
+    local container = _G.GW2_PartyGridContainer
+    if container and type(container.groups) == "table" then
+        for _, group in ipairs(container.groups) do
+            local frame = FindGw2FrameInGroup(group, unit, targetGUID)
+            if frame then
+                return frame
+            end
+        end
+    else
+        for groupIndex = 1, MAX_GW_PARTY_GROUPS do
+            local group = _G["GW2_PartyGroup" .. groupIndex]
+            local frame = FindGw2FrameInGroup(group, unit, targetGUID)
+            if frame then
+                return frame
+            end
+        end
+    end
+end
+
+local function FindGw2UIPartyFrame(unit)
+    if not unit then return end
+
+    local raidStyleFrame = FindGw2UIRaidStylePartyFrame(unit)
+    if raidStyleFrame then
+        return raidStyleFrame
+    end
+
+    local targetGUID = GetUnitGuidSafe(unit)
+    if _G.GwPartyFrame1 then
+        for i = 1, MAX_GW_PARTY_FRAMES do
+            local frame = _G["GwPartyFrame" .. i]
+            if frame and frame:IsVisible() then
+                local frameUnit = frame.unit
+                if frameUnit and frameUnit == unit then
+                    return frame
+                end
+
+                if targetGUID then
+                    local frameGUID = frame.guid or GetUnitGuidSafe(frameUnit)
+                    if frameGUID and frameGUID == targetGUID then
+                        return frame
+                    end
+
+                    if frame.displayedUnit then
+                        local displayedGUID = GetUnitGuidSafe(frame.displayedUnit)
+                        if displayedGUID and displayedGUID == targetGUID then
+                            return frame
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function FindCompactPartyFrame(unit)
+    if not CompactPartyFrame or not CompactPartyFrame:IsShown() then return end
+
+    for i = 1, MAX_COMPACT_PARTY_MEMBERS do
+        local member = _G["CompactPartyFrameMember" .. i]
+        if member and member:IsShown() then
+            local displayedUnit = member.displayedUnit or member.unit
+            if displayedUnit == unit then
+                member.BigDebuffsForceSquareMask = true
+                if member.portrait then member.portrait.BigDebuffsForceSquareMask = true end
+                if member.Portrait then member.Portrait.BigDebuffsForceSquareMask = true end
+                return member
+            end
+        end
+    end
+end
+
+local function GetBlizzardPartyMemberFrame(unit)
+    if not unit or not unit:match("^party%d$") then return end
+
+    local partyIndex = tonumber(unit:match("%d+"))
+    if not partyIndex then return end
+
+    if _G.PartyFrame and _G.PartyFrame["MemberFrame" .. partyIndex] then
+        return _G.PartyFrame["MemberFrame" .. partyIndex]
+    end
+
+    return _G["PartyMemberFrame" .. partyIndex]
+end
+
+local function GetFramePortraitTexture(frame)
+    if not frame or type(frame) ~= "table" then return end
+
+    if frame.portrait and frame.portrait.GetObjectType and frame.portrait:GetObjectType() == "Texture" then
+        return frame.portrait
+    end
+
+    if frame.Portrait and frame.Portrait.GetObjectType and frame.Portrait:GetObjectType() == "Texture" then
+        return frame.Portrait
+    end
+
+    if frame.PortraitContainer then
+        if frame.PortraitContainer.portrait then
+            return frame.PortraitContainer.portrait
+        end
+        if frame.PortraitContainer.Portrait then
+            return frame.PortraitContainer.Portrait
+        end
+    end
+
+    if frame.GetName then
+        local portrait = _G[frame:GetName() .. "Portrait"]
+        if portrait then
+            return portrait
+        end
+    end
+end
+
 local GetAnchor = {
+    Blizzard = function(anchor)
+        local anchors = BigDebuffs.anchors
+        local unit
+
+        for u, configAnchor in pairs(anchors.Blizzard.units) do
+            if anchor == configAnchor then
+                unit = u
+                break
+            end
+        end
+
+        local candidate = anchor
+
+        if type(candidate) == "string" then
+            candidate = _G[candidate]
+        end
+
+        if unit and unit:match("^party%d") then
+            if not candidate then
+                candidate = GetBlizzardPartyMemberFrame(unit)
+            end
+
+            local needsCompact = false
+
+            if not candidate then
+                needsCompact = true
+            elseif candidate.GetObjectType and candidate:GetObjectType() == "Texture" then
+                needsCompact = not (candidate:IsShown() and candidate:GetParent() and candidate:GetParent():IsShown())
+            elseif candidate.IsShown then
+                needsCompact = not candidate:IsShown()
+            end
+
+            if needsCompact then
+                local compact = FindCompactPartyFrame(unit)
+                if compact then
+                    candidate = compact
+                    candidate.BigDebuffsForceSquareMask = true
+                end
+            end
+
+            if candidate and candidate.GetObjectType and candidate:GetObjectType() == "Texture" then
+                local candidateParent = candidate:GetParent()
+                if candidateParent and candidateParent:IsShown() and not candidate:IsShown() then
+                    candidate = candidateParent
+                end
+            end
+        end
+
+        if not candidate then return end
+
+        if candidate.GetObjectType and candidate:GetObjectType() == "Texture" then
+            return candidate, candidate:GetParent()
+        end
+
+        local portrait = GetFramePortraitTexture(candidate)
+        if portrait and portrait:IsShown() then
+            if candidate.BigDebuffsForceSquareMask then
+                portrait.BigDebuffsForceSquareMask = true
+            end
+            candidate.portrait = portrait
+            return portrait, candidate
+        end
+
+        return candidate, candidate, true
+    end,
     ElvUIFrames = function(anchor)
         local anchors, unit = BigDebuffs.anchors
 
@@ -541,6 +809,41 @@ local GetAnchor = {
             end
             return
         end
+    end,
+    GW2_UIFrames = function(anchor)
+        local anchors = BigDebuffs.anchors
+        local gw2Config = anchors and anchors["GW2 UI"]
+        local unit
+
+        if gw2Config and gw2Config.units then
+            for u, configAnchor in pairs(gw2Config.units) do
+                if anchor == configAnchor then
+                    unit = u
+                    break
+                end
+            end
+        end
+
+        if unit and unit:match("^party") then
+            local frame = FindGw2UIPartyFrame(unit)
+            if frame then
+                if frame.portrait and frame.portrait:IsShown() then
+                    return frame.portrait, frame
+                else
+                    return frame, frame, true
+                end
+            end
+            return
+        end
+
+        local frame = _G[anchor]
+        if not frame then return end
+
+        if frame.portrait and frame.portrait:IsShown() then
+            return frame.portrait, frame
+        end
+
+        return frame, frame, true
     end,
 }
 
@@ -778,17 +1081,33 @@ local anchors = {
             party4 = "CellPartyFrameMember5",
         },
     },
+    ["GW2 UI"] = {
+        func = GetAnchor.GW2_UIFrames,
+        units = {
+            player = "GwPlayerUnitFrame",
+            target = "GwTargetUnitFrame",
+            focus = "GwFocusUnitFrame",
+            targettarget = "GwTargetTargetUnitFrame",
+            focustarget = "GwFocusTargetUnitFrame",
+            party1 = "GwPartyFrame1",
+            party2 = "GwPartyFrame2",
+            party3 = "GwPartyFrame3",
+            party4 = "GwPartyFrame4",
+            party5 = "GwPartyFrame5",
+        },
+    },
     ["Blizzard"] = {
+        func = GetAnchor.Blizzard,
         units = {
             player = "PlayerPortrait",
             pet = "PetPortrait",
             target = "TargetFramePortrait",
             targettarget = "TargetFrameToTPortrait",
             focus = "FocusFramePortrait",
-            party1 = "PartyMemberFrame1Portrait",
-            party2 = "PartyMemberFrame2Portrait",
-            party3 = "PartyMemberFrame3Portrait",
-            party4 = "PartyMemberFrame4Portrait",
+            party1 = "PartyMemberFrame1",
+            party2 = "PartyMemberFrame2",
+            party3 = "PartyMemberFrame3",
+            party4 = "PartyMemberFrame4",
             arena1 = "ArenaEnemyFrame1ClassPortrait",
             arena2 = "ArenaEnemyFrame2ClassPortrait",
             arena3 = "ArenaEnemyFrame3ClassPortrait",
@@ -814,6 +1133,53 @@ if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then
 
     for memberFrame in _G.PartyFrame.PartyMemberFramePool:EnumerateActive() do
         anchors.Blizzard.units[memberFrame.unit] = memberFrame
+    end
+end
+
+local function GetBlizzardUnitAnchor(unit)
+    local anchor = anchors.Blizzard.units[unit]
+    if type(anchor) == "table" then
+        return anchor
+    end
+    if type(anchor) == "string" then
+        local anchorFrame = _G[anchor]
+        if anchorFrame then
+            return anchorFrame
+        end
+    end
+
+    if not unit or not unit:match("^party%d$") then
+        return
+    end
+
+    local partyFrame = GetBlizzardPartyMemberFrame(unit)
+    if partyFrame then
+        anchors.Blizzard.units[unit] = partyFrame
+        return partyFrame
+    end
+
+    local partyIndex = tonumber(unit:match("%d+"))
+    if _G.PartyFrame and _G.PartyFrame.PartyMemberFramePool then
+        for memberFrame in _G.PartyFrame.PartyMemberFramePool:EnumerateActive() do
+            if memberFrame.unit == unit then
+                anchors.Blizzard.units[unit] = memberFrame
+                return memberFrame
+            end
+        end
+    end
+
+    local fallbackFrames = {
+        "CompactPartyFrameMember" .. partyIndex,
+        "PartyMemberFrame" .. partyIndex .. "Portrait",
+        "PartyMemberFrame" .. partyIndex,
+    }
+
+    for i = 1, #fallbackFrames do
+        local anchorFrame = _G[fallbackFrames[i]]
+        if anchorFrame then
+            anchors.Blizzard.units[unit] = anchorFrame
+            return anchorFrame
+        end
     end
 end
 
@@ -954,6 +1320,7 @@ function BigDebuffs:AttachUnitFrame(unit)
 
     frame.anchor = nil
     frame.blizzard = nil
+    frame.forceSquareMask = nil
 
     local config = self.db.profile.unitFrames[unit:gsub("%d", "")]
 
@@ -965,8 +1332,8 @@ function BigDebuffs:AttachUnitFrame(unit)
                 if v.func then
                     anchor, parent, noPortait = v.func(v.units[unit])
                 else
-                    if k == "Blizzard" and type(v.units[unit]) == "table" then
-                        anchor = v.units[unit]
+                    if k == "Blizzard" then
+                        anchor = GetBlizzardUnitAnchor(unit)
                     else
                         anchor = _G[v.units[unit]]
                     end
@@ -984,8 +1351,27 @@ function BigDebuffs:AttachUnitFrame(unit)
     end
 
     if frame.anchor then
+        frame.forceSquareMask = (frame.anchor and frame.anchor.BigDebuffsForceSquareMask) or
+            (frame.parent and frame.parent.BigDebuffsForceSquareMask)
         if frame.blizzard then
-            local parent = frame.anchor.portrait and frame.anchor.portrait:GetParent() or frame.anchor:GetParent()
+            local anchorIsCompact = frame.anchor
+                and frame.anchor.GetObjectType
+                and frame.anchor:GetObjectType() ~= "Texture"
+                and (frame.anchor.displayedUnit or frame.anchor.unit)
+
+            local parent = nil
+            if frame.anchor.portrait then
+                parent = frame.anchor.portrait:GetParent()
+            elseif anchorIsCompact then
+                parent = frame.anchor
+            elseif frame.anchor.GetParent then
+                parent = frame.anchor:GetParent()
+            end
+
+            local fallbackParent = (frame.anchor and frame.anchor.GetObjectType and frame.anchor:GetObjectType() ~= "Texture") and frame.anchor or nil
+
+            parent = parent or fallbackParent or UIParent
+
             frame:SetParent(parent)
             frame:SetFrameLevel(parent:GetFrameLevel())
             if frame.anchor.portrait then
@@ -1070,7 +1456,7 @@ function BigDebuffs:AttachUnitFrame(unit)
         else
             -- No saved position, anchor to the blizzard position
             if WOW_PROJECT_ID ~= WOW_PROJECT_CLASSIC then LoadAddOn("Blizzard_ArenaUI") end
-            local relativeFrame = _G[anchors.Blizzard.units[unit]] or UIParent
+            local relativeFrame = GetBlizzardUnitAnchor(unit) or UIParent
             frame:SetPoint("CENTER", relativeFrame, "CENTER")
         end
 
@@ -1306,8 +1692,14 @@ BigDebuffs.AttachedFrames = {}
 
 local INCREASED_MAX_BUFFS = 6
 
+local function GetFrameUnit(frame)
+    if not frame then return end
+    return frame.displayedUnit or frame.unit
+end
+
 function BigDebuffs:AddBigDebuffs(frame)
-    if not frame or not frame.displayedUnit or not UnitIsPlayer(frame.displayedUnit) then return end
+    local frameUnit = GetFrameUnit(frame)
+    if not frame or not frameUnit or not UnitIsPlayer(frameUnit) then return end
     local frameName = frame:GetName()
     local buffPrefix = frameName .. "Buff"
 
@@ -1326,7 +1718,7 @@ function BigDebuffs:AddBigDebuffs(frame)
         end
     end
 
-    self.AttachedFrames[frame.displayedUnit] = frame
+    self.AttachedFrames[frameUnit] = frame
 
     frame.BigDebuffs = frame.BigDebuffs or {}
     local max = self.db.profile.raidFrames.maxDebuffs + 1 -- add a frame for warning debuffs
@@ -1353,7 +1745,8 @@ function BigDebuffs:AddBigDebuffs(frame)
             end
         else
             if self.db.profile.raidFrames.anchor == "INNER" then
-                big:SetPoint("BOTTOMLEFT", frame.debuffFrames[1], "BOTTOMLEFT", 0, 0)
+                local innerAnchor = frame.debuffFrames and frame.debuffFrames[1] or frame
+                big:SetPoint("BOTTOMLEFT", innerAnchor, "BOTTOMLEFT", 0, 0)
             elseif self.db.profile.raidFrames.anchor == "LEFT" then
                 big:SetPoint("BOTTOMRIGHT", frame, "BOTTOMLEFT", 0, 1)
             elseif self.db.profile.raidFrames.anchor == "RIGHT" then
@@ -1382,10 +1775,11 @@ local pending = {}
 
 if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE and CompactUnitFrame and CompactUnitFrame.UpdateAuras then
     hooksecurefunc(CompactUnitFrame, "UpdateAuras", function(frame)
+        local frameUnit = GetFrameUnit(frame)
         if not BigDebuffs.db or not BigDebuffs.db.profile or not BigDebuffs.db.profile.raidFrames then return end
         if not BigDebuffs.db.profile.raidFrames.enabled then return end
         if not frame or frame:IsForbidden() then return end
-        if not UnitIsPlayer(frame.displayedUnit) then return end
+        if not frameUnit or not UnitIsPlayer(frameUnit) then return end
 
         BigDebuffs:AddBigDebuffs(frame)
         BigDebuffs:ShowBigDebuffs(frame)
@@ -1559,11 +1953,12 @@ local CompactUnitFrame_UtilSetDebuff = CompactUnitFrame_UtilSetDebuff
 
 if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then
     hooksecurefunc(CompactUnitFrame, "UpdateAuras", function(frame, unitAuraUpdateInfo)
+        local frameUnit = GetFrameUnit(frame)
         if not BigDebuffs.db.profile then return end
         if not BigDebuffs.db.profile.raidFrames then return end
         if not BigDebuffs.db.profile.raidFrames.enabled then return end
         if (not frame) or frame:IsForbidden() then return end
-        if (not UnitIsPlayer(frame.displayedUnit)) then return end
+        if (not frameUnit) or (not UnitIsPlayer(frameUnit)) then return end
         BigDebuffs:ShowBigDebuffs(frame)
 
         -- add extra buffs
@@ -1706,10 +2101,16 @@ else
 
     if CompactUnitFrame and CompactUnitFrame.UpdateAuras then
     hooksecurefunc(CompactUnitFrame, "UpdateAuras", function(frame)
+        local frameUnit = GetFrameUnit(frame)
         if (not frame.debuffFrames or not frame.optionTable.displayDebuffs) then
-            CompactUnitFrame_HideAllDebuffs(frame);
+            if frame.debuffFrames then
+                CompactUnitFrame_HideAllDebuffs(frame);
+            end
+            BigDebuffs:ShowBigDebuffs(frame)
             return;
         end
+
+        if not frameUnit then return end
 
         local index = 1;
         local frameNum = 1;
@@ -1718,11 +2119,11 @@ else
         --Show both Boss buffs & debuffs in the debuff location
         --First, we go through all the debuffs looking for any boss flagged ones.
         while (frameNum <= maxDebuffs) do
-            local debuffName = AuraUtil.UnpackAuraData(UnitDebuff(frame.displayedUnit, index, filter));
+            local debuffName = AuraUtil.UnpackAuraData(UnitDebuff(frameUnit, index, filter));
             if (debuffName) then
-                if (CompactUnitFrame_UtilIsBossAura(frame.displayedUnit, index, filter, false)) then
+                if (CompactUnitFrame_UtilIsBossAura(frameUnit, index, filter, false)) then
                     local debuffFrame = frame.debuffFrames[frameNum];
-                    CompactUnitFrame_UtilSetDebuff(debuffFrame, frame.displayedUnit, index, filter, true, false);
+                    CompactUnitFrame_UtilSetDebuff(debuffFrame, frameUnit, index, filter, true, false);
                     frameNum = frameNum + 1;
 					--Boss debuffs are about twice as big as normal debuffs, so display one less.
                     local bossDebuffScale = (debuffFrame.baseSize + BOSS_DEBUFF_SIZE_INCREASE) / debuffFrame.baseSize
@@ -1736,11 +2137,11 @@ else
 		--Then we go through all the buffs looking for any boss flagged ones.
         index = 1;
         while (frameNum <= maxDebuffs) do
-            local debuffName = AuraUtil.UnpackAuraData(UnitBuff(frame.displayedUnit, index, filter));
+            local debuffName = AuraUtil.UnpackAuraData(UnitBuff(frameUnit, index, filter));
             if (debuffName) then
-                if (CompactUnitFrame_UtilIsBossAura(frame.displayedUnit, index, filter, true)) then
+                if (CompactUnitFrame_UtilIsBossAura(frameUnit, index, filter, true)) then
                     local debuffFrame = frame.debuffFrames[frameNum];
-                    CompactUnitFrame_UtilSetDebuff(debuffFrame, frame.displayedUnit, index, filter, true, true);
+                    CompactUnitFrame_UtilSetDebuff(debuffFrame, frameUnit, index, filter, true, true);
                     frameNum = frameNum + 1;
 					--Boss debuffs are about twice as big as normal debuffs, so display one less.
                     local bossDebuffScale = (debuffFrame.baseSize + BOSS_DEBUFF_SIZE_INCREASE) / debuffFrame.baseSize
@@ -1754,11 +2155,11 @@ else
 		--Now we go through the debuffs with a priority (e.g. Weakened Soul and Forbearance)
         index = 1;
         while (frameNum <= maxDebuffs) do
-            local debuffName = AuraUtil.UnpackAuraData(UnitDebuff(frame.displayedUnit, index, filter));
+            local debuffName = AuraUtil.UnpackAuraData(UnitDebuff(frameUnit, index, filter));
             if (debuffName) then
-                if (CompactUnitFrame_UtilIsPriorityDebuff(frame.displayedUnit, index, filter)) then
+                if (CompactUnitFrame_UtilIsPriorityDebuff(frameUnit, index, filter)) then
                     local debuffFrame = frame.debuffFrames[frameNum];
-                    CompactUnitFrame_UtilSetDebuff(debuffFrame, frame.displayedUnit, index, filter, false, false);
+                    CompactUnitFrame_UtilSetDebuff(debuffFrame, frameUnit, index, filter, false, false);
                     frameNum = frameNum + 1;
                 end
             else
@@ -1775,14 +2176,14 @@ else
 		--Now, we display all normal debuffs.
         if (frame.optionTable.displayNonBossDebuffs) then
             while (frameNum <= maxDebuffs) do
-                local debuffName = AuraUtil.UnpackAuraData(UnitDebuff(frame.displayedUnit, index, filter));
+                local debuffName = AuraUtil.UnpackAuraData(UnitDebuff(frameUnit, index, filter));
                 if (debuffName) then
                     if (
-                        CompactUnitFrame_UtilShouldDisplayDebuff(frame.displayedUnit, index, filter) and
-                        not CompactUnitFrame_UtilIsBossAura(frame.displayedUnit, index, filter, false) and
-                        not CompactUnitFrame_UtilIsPriorityDebuff(frame.displayedUnit, index, filter)) then
+                        CompactUnitFrame_UtilShouldDisplayDebuff(frameUnit, index, filter) and
+                        not CompactUnitFrame_UtilIsBossAura(frameUnit, index, filter, false) and
+                        not CompactUnitFrame_UtilIsPriorityDebuff(frameUnit, index, filter)) then
                         local debuffFrame = frame.debuffFrames[frameNum];
-                        CompactUnitFrame_UtilSetDebuff(debuffFrame, frame.displayedUnit, index, filter, false, false);
+                        CompactUnitFrame_UtilSetDebuff(debuffFrame, frameUnit, index, filter, false, false);
                         frameNum = frameNum + 1;
                     end
                 else
@@ -1805,12 +2206,13 @@ end
     -- Show extra buffs
     if CompactUnitFrame and CompactUnitFrame.UpdateAuras then
     hooksecurefunc(CompactUnitFrame, "UpdateAuras", function(frame)
+        local frameUnit = GetFrameUnit(frame)
         if (not frame.buffFrames or not frame.optionTable.displayBuffs) then
             CompactUnitFrame_HideAllBuffs(frame);
             return;
         end
 
-        if not UnitIsPlayer(frame.displayedUnit) then
+        if not frameUnit or not UnitIsPlayer(frameUnit) then
             return
         end
 
@@ -1826,12 +2228,12 @@ end
         local frameNum = 1;
         local filter = nil;
         while (frameNum <= maxBuffs) do
-            local buffName = AuraUtil.UnpackAuraData(UnitBuff(frame.displayedUnit, index, filter));
+            local buffName = AuraUtil.UnpackAuraData(UnitBuff(frameUnit, index, filter));
             if ( buffName ) then
-                if ( CompactUnitFrame_UtilShouldDisplayBuff(frame.displayedUnit, index, filter) and not CompactUnitFrame_UtilIsBossAura(frame.displayedUnit, index, filter, true) ) then
+                if ( CompactUnitFrame_UtilShouldDisplayBuff(frameUnit, index, filter) and not CompactUnitFrame_UtilIsBossAura(frameUnit, index, filter, true) ) then
                     local buffFrame = frame.buffFrames[frameNum];
                     if buffFrame then
-                        CompactUnitFrame_UtilSetBuff(buffFrame, frame.displayedUnit, index, filter);
+                        CompactUnitFrame_UtilSetBuff(buffFrame, frameUnit, index, filter);
                     end
                     frameNum = frameNum + 1;
                 end
@@ -1858,12 +2260,13 @@ if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then
         return testAuras;
     end
     function BigDebuffs:ShowBigDebuffs(frame)
+        local frameUnit = GetFrameUnit(frame)
 
         if (not self.db.profile.raidFrames.enabled) or
-            (not frame.debuffFrames) or
             (not frame.BigDebuffs) or
             (not self:ShowInRaids()) or
-            (not UnitIsPlayer(frame.displayedUnit))
+            (not frameUnit) or
+            (not UnitIsPlayer(frameUnit))
         then
             return
         end
@@ -1877,7 +2280,7 @@ if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then
         HideBigDebuffs(frame)
 
         local debuffs = {}
-        local unitId = frame.displayedUnit;
+        local unitId = frameUnit;
 
         local function addDebuffs(aura)
             -- aura struct https://wowpedia.fandom.com/wiki/Struct_UnitAuraInfo
@@ -1937,9 +2340,9 @@ if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then
 
         local index = 1
 
-        if self.db.profile.raidFrames.hideBliz or
+        if frame.debuffFrames and (self.db.profile.raidFrames.hideBliz or
         self.db.profile.raidFrames.anchor == "INNER" or
-        self.db.profile.raidFrames.redirectBliz then
+        self.db.profile.raidFrames.redirectBliz) then
             CompactUnitFrame_HideAllDebuffs(frame)
         end
 
@@ -1961,11 +2364,12 @@ if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then
     end
 else
     function BigDebuffs:ShowBigDebuffs(frame)
+        local frameUnit = GetFrameUnit(frame)
         if (not self.db.profile.raidFrames.enabled) or
-            (not frame.debuffFrames) or
             (not frame.BigDebuffs) or
             (not self:ShowInRaids()) or
-            (not UnitIsPlayer(frame.displayedUnit))
+            (not frameUnit) or
+            (not UnitIsPlayer(frameUnit))
         then
             return
         end
@@ -1980,11 +2384,11 @@ else
         local warning, warningId
 
         for i = 1, 40 do
-            local _, _, _, dispelType, _, time, caster, _, _, id = AuraUtil.UnpackAuraData(UnitDebuff(frame.displayedUnit, i))
+            local _, _, _, dispelType, _, time, caster, _, _, id = AuraUtil.UnpackAuraData(UnitDebuff(frameUnit, i))
             if id then
                 local reaction = caster and UnitReaction("player", caster) or 0
                 local friendlySmokeBomb = id == 212183 and reaction > 4
-                local size = self:GetDebuffSize(id, self:IsDispellable(frame.displayedUnit, dispelType))
+                local size = self:GetDebuffSize(id, self:IsDispellable(frameUnit, dispelType))
                 if size and not friendlySmokeBomb then
                     big = true
                     local duration = time and time - now or 0
@@ -1992,7 +2396,7 @@ else
                 elseif self.db.profile.raidFrames.redirectBliz or
                     (self.db.profile.raidFrames.anchor == "INNER" and not self.db.profile.raidFrames.hideBliz) then
                     if not frame.optionTable.displayOnlyDispellableDebuffs or
-                        self:IsDispellable(frame.displayedUnit, dispelType)
+                        self:IsDispellable(frameUnit, dispelType)
                     then
                         -- duration 0 to preserve Blizzard order
                         tinsert(debuffs, { i, self.db.profile.raidFrames.default, 0, 0, id })
@@ -2018,7 +2422,7 @@ else
         end
 
         -- check for interrupts
-        local guid = UnitGUID(frame.displayedUnit)
+        local guid = UnitGUID(frameUnit)
         if guid and self.units[guid] and self.units[guid].expires and self.units[guid].expires > GetTime() then
             local spellId = self.units[guid].spellId
             local size = self:GetDebuffSize(spellId, false)
@@ -2059,9 +2463,9 @@ else
 
             local index = 1
 
-            if self.db.profile.raidFrames.hideBliz or
+            if frame.debuffFrames and (self.db.profile.raidFrames.hideBliz or
                 self.db.profile.raidFrames.anchor == "INNER" or
-                self.db.profile.raidFrames.redirectBliz then
+                self.db.profile.raidFrames.redirectBliz) then
                 CompactUnitFrame_HideAllDebuffs(frame)
             end
 
@@ -2071,7 +2475,7 @@ else
                     frame.BigDebuffs[index].baseSize = frame:GetHeight() * debuffs[i][2] * 0.01
                     frame.BigDebuffs[index].spellId = debuffs[i][5];
                     CompactUnitFrame_UtilSetDebuff(frame.BigDebuffs[index],
-                        frame.displayedUnit, debuffs[i][1], nil, false, false)
+                        frameUnit, debuffs[i][1], nil, false, false)
                     frame.BigDebuffs[index].cooldown:SetSwipeColor(0, 0, 0, 0.7)
                     index = index + 1
                 end
@@ -2182,16 +2586,23 @@ function BigDebuffs:UNIT_AURA(unit)
     if debuff then
         if duration < 1 then duration = 1 end -- auras like Solar Beam don't have a duration
 
-        if frame.current ~= icon then
-            if frame.blizzard then
-                -- Blizzard Frame
+        if frame.blizzard then
+            -- Blizzard Frame
 
-                -- fix Obsidian Claw icon
+            -- fix Obsidian Claw icon
+            if frame.current ~= icon then
                 icon = icon == 611425 and 1508487 or icon
-
                 frame.icon:SetTexture(icon)
-                frame.icon:SetTexCoord(0.1, 0.9, 0.1, 0.9)
+            end
 
+            if frame.forceSquareMask then
+                frame.icon:SetTexCoord(0, 1, 0, 1)
+                if frame.mask and frame.maskActive then
+                    frame.icon:RemoveMaskTexture(frame.mask)
+                    frame.maskActive = false
+                end
+            else
+                frame.icon:SetTexCoord(0.1, 0.9, 0.1, 0.9)
                 if not frame.mask then
                     frame.mask = frame:CreateMaskTexture()
                     frame.mask:SetAllPoints(frame.icon)
@@ -2206,9 +2617,14 @@ function BigDebuffs:UNIT_AURA(unit)
                             end
                         end
                     end
-                    frame.icon:AddMaskTexture(frame.mask)
                 end
-            else
+                if frame.mask and not frame.maskActive then
+                    frame.icon:AddMaskTexture(frame.mask)
+                    frame.maskActive = true
+                end
+            end
+        else
+            if frame.current ~= icon then
                 frame.icon:SetTexture(icon)
             end
         end
