@@ -545,18 +545,31 @@ end
 local function FindCompactPartyFrame(unit)
     if not CompactPartyFrame or not CompactPartyFrame:IsShown() then return end
 
+    local partyIndex = unit and tonumber(unit:match("^party(%d+)$"))
+
     for i = 1, MAX_COMPACT_PARTY_MEMBERS do
         local member = _G["CompactPartyFrameMember" .. i]
         if member and member:IsShown() then
             local displayedUnit = member.displayedUnit or member.unit
             if displayedUnit == unit then
-                member.BigDebuffsForceSquareMask = true
-                if member.portrait then member.portrait.BigDebuffsForceSquareMask = true end
-                if member.Portrait then member.Portrait.BigDebuffsForceSquareMask = true end
                 return member
             end
         end
     end
+
+    if partyIndex then
+        local member = _G["CompactPartyFrameMember" .. partyIndex]
+        if member and member:IsShown() then
+            return member
+        end
+    end
+end
+
+local function ShouldForceSquareMask(anchor)
+    if not anchor or not anchor.GetName then return false end
+    local name = anchor:GetName()
+    if not name then return false end
+    return name:match("^CompactPartyFrameMember%d+$") ~= nil or name:match("^PartyFrame%.MemberFrame%d+$") ~= nil
 end
 
 local function GetBlizzardPartyMemberFrame(unit)
@@ -637,7 +650,14 @@ local GetAnchor = {
                 local compact = FindCompactPartyFrame(unit)
                 if compact then
                     candidate = compact
-                    candidate.BigDebuffsForceSquareMask = true
+                elseif unit then
+                    local partyIndex = tonumber(unit:match("^party(%d+)$"))
+                    if partyIndex then
+                        local compactByIndex = _G["CompactPartyFrameMember" .. partyIndex]
+                        if compactByIndex and compactByIndex:IsShown() then
+                            candidate = compactByIndex
+                        end
+                    end
                 end
             end
 
@@ -657,10 +677,6 @@ local GetAnchor = {
 
         local portrait = GetFramePortraitTexture(candidate)
         if portrait and portrait:IsShown() then
-            if candidate.BigDebuffsForceSquareMask then
-                portrait.BigDebuffsForceSquareMask = true
-            end
-            candidate.portrait = portrait
             return portrait, candidate
         end
 
@@ -1351,8 +1367,7 @@ function BigDebuffs:AttachUnitFrame(unit)
     end
 
     if frame.anchor then
-        frame.forceSquareMask = (frame.anchor and frame.anchor.BigDebuffsForceSquareMask) or
-            (frame.parent and frame.parent.BigDebuffsForceSquareMask)
+        frame.forceSquareMask = ShouldForceSquareMask(frame.anchor) or ShouldForceSquareMask(frame.parent)
         if frame.blizzard then
             local anchorIsCompact = frame.anchor
                 and frame.anchor.GetObjectType
@@ -1551,6 +1566,7 @@ function BigDebuffs:OnEnable()
     self:RegisterEvent("PLAYER_TARGET_CHANGED")
     self:RegisterEvent("UNIT_PET")
     self:RegisterEvent("PLAYER_ENTERING_WORLD")
+    self:RegisterEvent("GROUP_ROSTER_UPDATE")
     self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 
     self:RegisterEvent("NAME_PLATE_UNIT_ADDED")
@@ -1581,6 +1597,15 @@ function BigDebuffs:OnEnable()
     InsertTestDebuff(589, "Magic") -- Shadow Word: Pain
     InsertTestDebuff(589, "Magic") -- Shadow Word: Pain
     InsertTestDebuff(772, nil) -- Rend
+end
+
+function BigDebuffs:GROUP_ROSTER_UPDATE()
+    for i = 1, #units do
+        self:AttachUnitFrame(units[i])
+        self:UNIT_AURA(units[i])
+    end
+
+    self:UNIT_AURA_ALL_UNITS()
 end
 
 function BigDebuffs:PLAYER_ENTERING_WORLD()
@@ -1694,7 +1719,39 @@ local INCREASED_MAX_BUFFS = 6
 
 local function GetFrameUnit(frame)
     if not frame then return end
-    return frame.displayedUnit or frame.unit
+
+    local unit = frame.displayedUnit or frame.unit or frame.unitToken
+    if unit then
+        return unit
+    end
+
+    if frame.GetAttribute then
+        unit = frame:GetAttribute("unit")
+        if unit then
+            return unit
+        end
+
+        local unitBase = frame:GetAttribute("unitbase")
+        local unitSuffix = frame:GetAttribute("unitsuffix")
+        if unitBase and unitSuffix then
+            return unitBase .. unitSuffix
+        end
+    end
+
+    if frame.GetName then
+        local frameName = frame:GetName()
+        if frameName then
+            local compactPartyIndex = frameName:match("^CompactPartyFrameMember(%d+)$")
+            if compactPartyIndex then
+                return "party" .. compactPartyIndex
+            end
+
+            local partyIndex = frameName:match("MemberFrame(%d+)")
+            if partyIndex then
+                return "party" .. partyIndex
+            end
+        end
+    end
 end
 
 function BigDebuffs:AddBigDebuffs(frame)
@@ -2489,10 +2546,15 @@ function BigDebuffs:IsPriorityBigDebuff(id)
     return self.Spells[id].priority
 end
 
+function BigDebuffs:IsInArenaInstance()
+    local _, instanceType = IsInInstance()
+    return instanceType == "arena"
+end
+
 function BigDebuffs:UNIT_AURA(unit)
     if not self.db.profile.unitFrames.enabled or
         not self.db.profile.unitFrames[unit:gsub("%d", "")].enabled or
-        (GetNumGroupMembers() > 5 and unit:match("party"))
+        (IsInRaid() and (not self:IsInArenaInstance()) and unit:match("party"))
     then
         return
     end
@@ -2863,6 +2925,14 @@ function BigDebuffs:NAME_PLATE_UNIT_REMOVED(_, unit)
 end
 
 function BigDebuffs:ShowInRaids()
+    if self:IsInArenaInstance() then
+        return true;
+    end
+
+    if not IsInRaid() then
+        return true;
+    end
+
     local grpSize = GetNumGroupMembers();
     local inRaid = self.db.profile.raidFrames.inRaid;
     if (inRaid.hide and grpSize > inRaid.size) then
