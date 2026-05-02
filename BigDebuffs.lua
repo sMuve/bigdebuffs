@@ -143,6 +143,16 @@ local defaults = {
                 matchFrameHeight = true,
                 size = 50,
             },
+            raid = {
+                enabled = true,
+                anchor = "auto",
+                anchorPoint = "auto",
+                relativePoint = "auto",
+                x = 0,
+                y = 0,
+                matchFrameHeight = true,
+                size = 50,
+            },
             cc = true,
             interrupts = true,
             immunities = true,
@@ -418,16 +428,16 @@ local units = addon.Units or {
     "arena5",
 }
 
+for i = 1, 40 do
+    table.insert(units, "raid" .. i)
+end
+
 
 
 local unitsWithRaid = {}
 
 for i = 1, #units do
     table.insert(unitsWithRaid, units[i])
-end
-
-for i = 1, 40 do
-    table.insert(unitsWithRaid, "raid" .. i)
 end
 
 local MAX_COMPACT_PARTY_MEMBERS = MEMBERS_PER_RAID_GROUP or 5
@@ -819,11 +829,11 @@ local GetAnchor = {
             end
         end
 
-        if unit and (unit:match("party") or unit:match("player")) then
-            if Cell then
+        if unit and (unit:match("party") or unit:match("raid")) and not UnitIsUnit(unit, "player") then
+            if Cell and Cell.funcs and Cell.funcs.GetUnitButtonByGUID then
                 local guid = UnitGUID(unit)
-                local frame = Cell.funcs:GetUnitButtonByGUID(guid)
-                if frame then
+                local frame = guid and Cell.funcs.GetUnitButtonByGUID(guid)
+                if frame and frame.IsVisible and frame:IsVisible() then
                     return frame, frame, true
                 end
             end
@@ -1094,7 +1104,6 @@ local anchors = {
         alignLeft = true,
         func = GetAnchor.Cell,
         units = {
-            player = "CellPartyFrameMember1",
             party1 = "CellPartyFrameMember2",
             party2 = "CellPartyFrameMember3",
             party3 = "CellPartyFrameMember4",
@@ -1136,6 +1145,10 @@ local anchors = {
         },
     },
 }
+
+for i = 1, 40 do
+    anchors.Cell.units["raid" .. i] = "CellRaidFrameMember" .. i
+end
 
 if WOW_PROJECT_ID == WOW_PROJECT_MAINLINE then
     anchors.Blizzard.units = {
@@ -1299,6 +1312,7 @@ function BigDebuffs:AttachUnitFrame(unit)
     frame.anchor = nil
     frame.blizzard = nil
     frame.forceSquareMask = nil
+    frame.noAnchor = nil
 
     local config = self.db.profile.unitFrames[unit:gsub("%d", "")]
 
@@ -1422,6 +1436,10 @@ function BigDebuffs:AttachUnitFrame(unit)
                 frame:SetAllPoints(frame.anchor)
             end
         end
+    elseif unit:match("^raid%d+") and config.anchor == "auto" then
+        frame.noAnchor = true
+        frame:Hide()
+        return
     else
         -- Manual
         frame:SetParent(UIParent)
@@ -1529,6 +1547,7 @@ function BigDebuffs:OnEnable()
     self:RegisterEvent("PLAYER_TARGET_CHANGED")
     self:RegisterEvent("UNIT_PET")
     self:RegisterEvent("PLAYER_ENTERING_WORLD")
+    self:RegisterEvent("GROUP_ROSTER_UPDATE")
     if WOW_PROJECT_ID ~= WOW_PROJECT_MAINLINE then
         self:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
     end
@@ -1566,6 +1585,13 @@ end
 function BigDebuffs:PLAYER_ENTERING_WORLD()
     for i = 1, #units do
         self:AttachUnitFrame(units[i])
+        self:UNIT_AURA(units[i])
+    end
+end
+
+function BigDebuffs:GROUP_ROSTER_UPDATE()
+    self:Refresh()
+    for i = 1, #units do
         self:UNIT_AURA(units[i])
     end
 end
@@ -2548,13 +2574,27 @@ function BigDebuffs:UNIT_AURA(unit)
         not self.db.profile.unitFrames[unit:gsub("%d", "")].enabled or
         (GetNumGroupMembers() > 5 and unit:match("party"))
     then
+        local frame = self.UnitFrames[unit]
+        if frame then
+            frame:Hide()
+            frame.current = nil
+        end
+        return
+    end
+
+    if unit:match("^raid%d+") and not self:ShowInRaids() then
+        local frame = self.UnitFrames[unit]
+        if frame then
+            frame:Hide()
+            frame.current = nil
+        end
         return
     end
 
     self:AttachUnitFrame(unit)
 
     local frame = self.UnitFrames[unit]
-    if not frame then return end
+    if not frame or frame.noAnchor then return end
 
     local UnitDebuff = BigDebuffs.test and UnitDebuffTest or UnitDebuff
 
